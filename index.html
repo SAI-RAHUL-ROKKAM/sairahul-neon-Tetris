@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tetris — Neon Retro</title>
+  <style>
+    /* Minimal CSS: responsive layout and neon retro look */
+    :root{
+      --bg:#071019; --panel:#0b1a25;
+      --neon-c: #00f6ff; --accent:#ff2d95;
+      --tile-size: calc(min(12vmin, 30px)); /* responsive tile size */
+    }
+    html,body,#root{height:100%;margin:0;background:linear-gradient(180deg,#041018 0%, #071019 60%); color:#cfe7ff; font-family: Inter, system-ui, sans-serif;}
+    .app{display:flex;flex-direction:column;align-items:center;padding:12px;gap:12px;}
+    header{display:flex;gap:12px;align-items:center;width:100%;max-width:1100px; justify-content:space-between}
+    .card{background:rgba(255,255,255,0.03);border-radius:12px;padding:12px;box-shadow:0 4px 18px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.03)}
+    .auth{display:flex;gap:8px;flex-direction:column;min-width:260px}
+    input, button, select {padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:inherit}
+    button{cursor:pointer}
+    .layout{display:flex;gap:12px;width:100%;max-width:1100px;flex-wrap:wrap;justify-content:center}
+    /* Game layout */
+    .game-panel{display:flex;gap:12px;align-items:flex-start}
+    .board{display:grid;grid-template-columns:repeat(10, var(--tile-size));grid-auto-rows:var(--tile-size);background:rgba(0,0,0,0.4);padding:6px;border-radius:8px}
+    .cell{width:var(--tile-size);height:var(--tile-size);box-sizing:border-box;border-radius:4px; border:1px solid rgba(255,255,255,0.02)}
+    .cell.empty{background:transparent}
+    .controls{display:flex;flex-direction:column;gap:8px;min-width:200px}
+    .preview{width:calc(var(--tile-size)*4);height:calc(var(--tile-size)*4);display:grid;grid-template-columns:repeat(4,var(--tile-size));grid-auto-rows:var(--tile-size);background:rgba(255,255,255,0.02);border-radius:8px;padding:4px}
+    .stat{display:flex;flex-direction:column;gap:6px}
+    .touch-row{display:flex;gap:8px;justify-content:center}
+    .touch-button{padding:12px;border-radius:8px;background:rgba(255,255,255,0.04);min-width:56px}
+    /* neon accent */
+    .neon{box-shadow:0 0 8px rgba(0,246,255,0.12), inset 0 0 24px rgba(255,45,149,0.02)}
+    /* small screens */
+    @media (max-width:600px){
+      header{flex-direction:column;align-items:center}
+      .game-panel{flex-direction:column;align-items:center}
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + ReactDOM + Babel (for in-browser JSX; allowed per your request) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+
+  <!-- App Code (JSX) -->
+  <script type="text/babel">
+/*
+  Tetris React app (concise + commented for teaching).
+  Notes:
+  - Auth: calls backend endpoints /api/register and /api/login (server must be running)
+  - Save/load & leaderboard: /api/save, /api/load, /api/leaderboard
+  - Mobile touch controls are included
+  - 20 levels: speeds up each level; level range 1..20
+*/
+
+/* ---------- Utilities: pieces, rotations, random ---------- */
+const TETROMINOES = {
+  I: { blocks: [[1,1,1,1]], color:"#00f6ff"},
+  O: { blocks: [[1,1],[1,1]], color:"#ffb86b"},
+  T: { blocks: [[0,1,0],[1,1,1]], color:"#c792ea"},
+  S: { blocks: [[0,1,1],[1,1,0]], color:"#8be9fd"},
+  Z: { blocks: [[1,1,0],[0,1,1]], color:"#ff5555"},
+  J: { blocks: [[1,0,0],[1,1,1]], color:"#50fa7b"},
+  L: { blocks: [[0,0,1],[1,1,1]], color:"#ff79c6"}
+};
+const PIECE_KEYS = Object.keys(TETROMINOES);
+function rotate(matrix){ /* clockwise rotation */ return matrix[0].map((_,i)=>matrix.map(r=>r[matrix[0].length-1-i])); }
+function deepClone(a){ return JSON.parse(JSON.stringify(a)); }
+function emptyBoard(cols=10, rows=20){ return Array.from({length:rows},_=>Array(cols).fill(null)); }
+function spawnPiece(){
+  const k = PIECE_KEYS[Math.floor(Math.random()*PIECE_KEYS.length)];
+  return { type:k, matrix: deepClone(TETROMINOES[k].blocks), color:TETROMINOES[k].color, x:3, y: - (TETROMINOES[k].blocks.length) };
+}
+
+/* ---------- React App ---------- */
+const {useState, useEffect, useRef} = React;
+
+function App(){
+  // Auth & app state
+  const [user, setUser] = useState(null); // {username}
+  const [view, setView] = useState('auth'); // 'auth','game','leaderboard','settings','terms'
+  const [message, setMessage] = useState('');
+  useEffect(()=>{ // check login on load
+    fetch('/api/me').then(r=>r.json()).then(j=>{ if(j.ok) { setUser({username:j.username}); setView('game')} }).catch(()=>{});
+  },[]);
+
+  return (
+    <div className="app">
+      <header>
+        <h1 style={{margin:0}}>Neon Tetris</h1>
+        <nav style={{display:'flex',gap:8}}>
+          {user && <div style={{alignSelf:'center'}}>Hello, {user.username}</div>}
+          <button onClick={()=>setView('game')}>Play</button>
+          <button onClick={()=>setView('leaderboard')}>Leaderboard</button>
+          <button onClick={()=>setView('settings')}>Settings</button>
+          <button onClick={()=>setView('terms')}>Terms</button>
+          {user? <button onClick={async ()=>{ await fetch('/api/logout'); setUser(null); setView('auth');}}>Logout</button> :
+            <button onClick={()=>setView('auth')}>Login</button>}
+        </nav>
+      </header>
+
+      <div className="layout">
+        {view==='auth' && <Auth onLogin={(u)=>{ setUser(u); setView('game'); setMessage('');}} setMessage={setMessage} />}
+        {view==='game' && <Game onRequireAuth={()=>setView('auth')} onMessage={setMessage} />}
+        {view==='leaderboard' && <Leaderboard />}
+        {view==='settings' && <Settings />}
+        {view==='terms' && <Terms />}
+      </div>
+
+      <footer style={{maxWidth:1100,width:'100%',textAlign:'center',opacity:0.8}} className="card">
+        <small>{message}</small>
+      </footer>
+    </div>
+  );
+}
+
+/* ---------- Auth component ---------- */
+function Auth({onLogin,setMessage}){
+  const [mode, setMode] = useState('login'); // login/register
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  async function submit(){
+    try{
+      const res = await fetch(`/api/${mode}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password})});
+      const j = await res.json();
+      if(!j.ok){ setMessage(j.error||'Failed'); return; }
+      onLogin({username});
+    }catch(e){ setMessage('Network error'); }
+  }
+  return (
+    <div className="card auth">
+      <h3>{mode==='login' ? 'Login' : 'Register'}</h3>
+      <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="username" />
+      <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="password" type="password" />
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={submit}>{mode==='login' ? 'Login' : 'Register'}</button>
+        <button onClick={()=>setMode(mode==='login'?'register':'login')}>{mode==='login' ? 'Switch to Register' : 'Switch to Login'}</button>
+      </div>
+      <small style={{opacity:0.8}}>Accounts and saves are stored on the server. Passwords are hashed.</small>
+    </div>
+  )
+}
+
+/* ---------- Game component: core tetris logic & UI ---------- */
+function Game({onRequireAuth,onMessage}){
+  // Board state and pieces
+  const COLS = 10, ROWS = 20;
+  const [board, setBoard] = useState(()=>emptyBoard(COLS,ROWS));
+  const [piece, setPiece] = useState(spawnPiece());
+  const [nextPiece, setNextPiece] = useState(spawnPiece());
+  const [score, setScore] = useState(0);
+  const [level, setLevel] = useState(1); // 1..20
+  const [lines, setLines] = useState(0);
+  const [running, setRunning] = useState(true);
+  const [gameOver, setGameOver] = useState(false);
+  const dropRef = useRef(null), tickRef = useRef(0);
+  // speed: base delay ms divided by level (progressive). We'll clamp to 20 levels.
+  function levelDelay(l){ return Math.max(80, 1000 - (l-1)*45); } // level 1 ~1000ms, level20 ~1000-855=145ms -> clamped 80ms
+
+  /* collision check */
+  function collides(board, piece, nx, ny, matrix){
+    const m = matrix || piece.matrix;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = piece.x + c + nx, y = piece.y + r + ny;
+        if(x<0 || x>=COLS || y>=ROWS) return true;
+        if(y>=0 && board[y][x]) return true;
+      }
+    }
+    return false;
+  }
+
+  /* lock piece into board and clear lines */
+  function lockAndSpawn(currPiece){
+    const b = deepClone(board);
+    const m = currPiece.matrix;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = currPiece.x + c, y = currPiece.y + r;
+        if(y>=0 && y<ROWS && x>=0 && x<COLS) b[y][x] = { color: currPiece.color };
+        if(y<0){
+          // piece locked above top => game over
+          setGameOver(true);
+          setRunning(false);
+        }
+      }
+    }
+    // clear lines
+    let full = 0;
+    for(let r=ROWS-1;r>=0;r--){
+      if(b[r].every(cell=>cell)) { b.splice(r,1); b.unshift(Array(COLS).fill(null)); full++; r++; }
+    }
+    if(full>0){
+      // scoring: classic-ish
+      const add = [0,40,100,300,1200][full] || full*100;
+      const lvlMult = level;
+      setScore(s=>s + add*lvlMult);
+      setLines(l=>l + full);
+      // increase level every X lines (say every 10 lines) up to 20
+      setLevel(l=>Math.min(20, l + Math.floor((lines+full)/10) - Math.floor(lines/10)));
+    }
+    setBoard(b);
+    // spawn next
+    setPiece(nextPiece);
+    setNextPiece(spawnPiece());
+  }
+
+  /* move functions */
+  function move(dx,dy){
+    if(!running) return;
+    if(!collides(board,piece,dx,dy)) setPiece(p=>({...p, x:p.x+dx, y:p.y+dy}));
+    else if(dy===1){
+      // cannot move down -> lock
+      lockAndSpawn(piece);
+    }
+  }
+  function rotatePiece(){
+    if(!running) return;
+    const rotated = rotate(piece.matrix);
+    // wall kicks simple attempt: try -1, +1, -2
+    const kicks = [0,-1,1,-2,2];
+    for(const k of kicks){
+      if(!collides(board,piece,k,0,rotated)){ setPiece(p=>({...p, matrix:rotated, x:p.x+k})); return; }
+    }
+  }
+  function hardDrop(){
+    let d=0;
+    while(!collides(board,piece,0,d+1)) d++;
+    if(d>0){ setPiece(p=>({...p, y:p.y+d})); lockAndSpawn({...piece, y:piece.y+d}); }
+  }
+
+  /* game tick */
+  useEffect(()=>{
+    if(!running) return;
+    const delay = levelDelay(level);
+    dropRef.current = setInterval(()=>{
+      tickRef.current++;
+      // move down if possible otherwise lock
+      if(!collides(board,piece,0,1)) setPiece(p=>({...p, y:p.y+1}));
+      else lockAndSpawn(piece);
+    }, delay);
+    return ()=>clearInterval(dropRef.current);
+  },[running, board, piece, level]);
+
+  /* keyboard handlers */
+  useEffect(()=>{
+    function onKey(e){
+      if(!running && !gameOver) return;
+      if(e.key === 'ArrowLeft') move(-1,0);
+      else if(e.key === 'ArrowRight') move(1,0);
+      else if(e.key === 'ArrowDown') move(0,1);
+      else if(e.key === 'ArrowUp') rotatePiece();
+      else if(e.key === ' ') { e.preventDefault(); hardDrop(); }
+      else if(e.key === 'p' || e.key === 'P') togglePause();
+    }
+    window.addEventListener('keydown', onKey);
+    return ()=>window.removeEventListener('keydown', onKey);
+  },[board,piece,running,gameOver,level,lines]);
+
+  /* initial spawn / new game */
+  useEffect(()=>{ resetGame(); },[]);
+
+  function resetGame(){
+    setBoard(emptyBoard(COLS,ROWS));
+    const p = spawnPiece();
+    setPiece(p);
+    setNextPiece(spawnPiece());
+    setScore(0); setLevel(1); setLines(0); setRunning(true); setGameOver(false);
+  }
+
+  function togglePause(){
+    setRunning(r=>{ const nr = !r; if(!nr) { /* pausing */ } else { /* resume */ } return nr;});
+    if(!running) { /* was paused->resuming */ onMessage('Resumed'); }
+    else { /* was running->paused */ onMessage('Paused, saving...'); saveGame(); }
+  }
+
+  /* Save/Load via backend */
+  async function saveGame(slot=1){
+    const token = { board, piece, nextPiece, score, level, lines, timestamp: Date.now(), slot };
+    try{
+      const res = await fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(token)});
+      const j = await res.json();
+      if(!j.ok) onMessage(j.error || 'Save failed');
+      else onMessage('Saved');
+    }catch(e){ onMessage('Network save failed'); }
+  }
+  async function loadGame(slot=1){
+    try{
+      const res = await fetch(`/api/load?slot=${slot}`);
+      const j = await res.json();
+      if(!j.ok){ onMessage(j.error || 'Load failed'); return; }
+      const s = j.save;
+      if(!s) { onMessage('No save found'); return; }
+      setBoard(s.board); setPiece(s.piece); setNextPiece(s.nextPiece); setScore(s.score); setLevel(s.level); setLines(s.lines); setRunning(true); setGameOver(false);
+      onMessage('Loaded save');
+    }catch(e){ onMessage('Network load failed'); }
+  }
+
+  /* on game over - auto-save and update leaderboard */
+  useEffect(()=>{
+    if(gameOver){
+      onMessage('Game Over — saving score...');
+      (async ()=>{
+        await fetch('/api/score', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({score,level})});
+        await saveGame(1);
+        onMessage('Score saved');
+      })();
+    }
+  },[gameOver]);
+
+  /* render helpers */
+  function cellStyle(cell){
+    if(!cell) return {background:'transparent'};
+    return {background:cell.color, boxShadow:'0 0 6px rgba(255,255,255,0.06) inset'};
+  }
+
+  /* draw temporary board with piece overlay for rendering */
+  function renderBoard(){
+    const b = deepClone(board);
+    const m = piece.matrix;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = piece.x + c, y = piece.y + r;
+        if(y>=0 && y<ROWS && x>=0 && x<COLS) b[y][x] = { color: piece.color };
+      }
+    }
+    return b;
+  }
+
+  return (
+    <div style={{display:'flex',gap:12,flexDirection:'column',alignItems:'center',width:'100%'}}>
+      <div className="game-panel">
+        <div>
+          <div className="card" style={{padding:8}}>
+            <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'space-between'}}>
+              <div>
+                <div style={{fontSize:18}}>Score: {score}</div>
+                <div style={{opacity:0.8}}>Level: {level} Lines: {lines}</div>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>{ resetGame(); }}>Restart</button>
+                <button onClick={()=>{ togglePause(); }}>{running ? 'Pause' : 'Resume'}</button>
+                <button onClick={()=>saveGame(1)}>Save</button>
+                <button onClick={()=>loadGame(1)}>Load</button>
+              </div>
+            </div>
+          </div>
+
+          <div style={{marginTop:8}} className="board card neon">
+            {renderBoard().flat().map((cell,idx)=>(
+              <div key={idx} className={"cell " + (cell? 'filled':'empty')} style={cellStyle(cell)}></div>
+            ))}
+          </div>
+        </div>
+
+        <div className="controls card">
+          <div className="stat">
+            <div style={{fontWeight:700}}>Next</div>
+            <div className="preview">
+              { (function(){ // render 4x4 preview grid
+                const grid = Array.from({length:16},_=>null);
+                const m = nextPiece.matrix;
+                const offset = {x:1,y:1};
+                for(let r=0;r<m.length;r++) for(let c=0;c<m[r].length;c++){
+                  if(m[r][c]){
+                    const i = (offset.y + r)*4 + (offset.x + c);
+                    grid[i] = {color: nextPiece.color};
+                  }
+                }
+                return grid.map((cell,i)=>(<div key={i} style={{width:'100%',height:'100%',boxSizing:'border-box',borderRadius:4, background:cell?cell.color:'transparent'}}></div>));
+              })() }
+            </div>
+          </div>
+
+          <div className="stat">
+            <div style={{fontWeight:700}}>Controls</div>
+            <div style={{display:'flex',gap:6}}>
+              <div>Arrows: move/rotate</div><div>Space: drop</div>
+            </div>
+          </div>
+
+          <div className="stat">
+            <div style={{fontWeight:700}}>Touch Controls</div>
+            <div className="touch-row">
+              <button className="touch-button" onClick={()=>move(-1,0)}>◀</button>
+              <button className="touch-button" onClick={()=>move(1,0)}>▶</button>
+              <button className="touch-button" onClick={()=>rotatePiece()}>⟳</button>
+              <button className="touch-button" onClick={()=>hardDrop()}>Drop</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>
+        <button onClick={()=>{ fetch('/api/leaderboard').then(r=>r.json()).then(j=>{ if(j.ok) onMessage(JSON.stringify(j.top.slice(0,5))); })}}>Top scores (debug)</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Leaderboard, Settings, Terms ---------- */
+function Leaderboard(){
+  const [top, setTop] = useState([]);
+  useEffect(()=>{ fetch('/api/leaderboard').then(r=>r.json()).then(j=>{ if(j.ok) setTop(j.top);}) },[]);
+  return (
+    <div className="card" style={{minWidth:320}}>
+      <h3>Leaderboard</h3>
+      <ol>
+        {top.map((t,i)=>(<li key={i}>{t.username} — {t.score} (L{t.level})</li>))}
+      </ol>
+    </div>
+  );
+}
+function Settings(){
+  return (
+    <div className="card">
+      <h3>Settings</h3>
+      <p>Minimal settings placeholder. You can implement music toggle, volume, sensitivity here.</p>
+    </div>
+  );
+}
+function Terms(){
+  return (
+    <div className="card">
+      <h3>Terms</h3>
+      <p>Simple demo Tetris. Data stored for learning/demo. Do not use for sensitive accounts.</p>
+    </div>
+  );
+}
+
+/* ---------- Render App ---------- */
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+  </script>
+</body>
+</html>
